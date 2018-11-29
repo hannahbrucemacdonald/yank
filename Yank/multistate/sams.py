@@ -99,9 +99,9 @@ class SAMSSampler(MultiStateSampler):
 
     >>> move = mcmc.GHMCMove(timestep=2.0*unit.femtoseconds, n_steps=50)
     >>> simulation = SAMSSampler(mcmc_moves=move, number_of_iterations=2,
-    >>>                          state_update_scheme='restricted-range', locality=5,
-    >>>                          update_stages='two-stage', flatness_threshold=0.2,
-    >>>                          weight_update_method='rao-blackwellized',
+    >>>                          state_update_scheme='restricted-range-jump', locality=5,
+    >>>                          update_stages='two-stage', flatness_criteria='logZ-flatness', 
+    >>>                          flatness_threshold=0.2, weight_update_method='rao-blackwellized',
     >>>                          adapt_target_probabilities=False)
 
 
@@ -158,6 +158,7 @@ class SAMSSampler(MultiStateSampler):
                  state_update_scheme='global-jump',
                  locality=5,
                  update_stages='two-stage',
+                 flatness_criteria='logZ-flatness',
                  flatness_threshold=0.2,
                  weight_update_method='rao-blackwellized',
                  adapt_target_probabilities=False,
@@ -184,7 +185,10 @@ class SAMSSampler(MultiStateSampler):
             One of ['one-stage', 'two-stage']
             ``one-stage`` will use the asymptotically optimal scheme throughout the entire simulation (not recommended due to slow convergence)
             ``two-stage`` will use a heuristic first stage to achieve flat histograms before switching to the asymptotically optimal scheme
-        flatness_threshold : float, optiona, default=0.2
+        flatness_criteria : string, optiona, default='logZ-flatness'
+            Method of assessing when to switch to asymptotically optimal scheme
+             One of ['logZ-flatness','minimum-visits','histogram-flatness'] 
+        flatness_threshold : float, optional, default=0.2
             Histogram relative flatness threshold to use for first stage of two-stage scheme.
         weight_update_method : str, optional, default='rao-blackwellized'
             Method to use for updating log weights in SAMS. One of ['optimal', 'rao-blackwellized']
@@ -205,6 +209,7 @@ class SAMSSampler(MultiStateSampler):
         self.state_update_scheme = state_update_scheme
         self.locality = locality
         self.update_stages = update_stages
+        self.flatness_criteria = flatness_criteria
         self.flatness_threshold = flatness_threshold
         self.weight_update_method = weight_update_method
         self.adapt_target_probabilities = adapt_target_probabilities
@@ -235,6 +240,14 @@ class SAMSSampler(MultiStateSampler):
             return scheme
 
         @staticmethod
+        def _flatness_criteria_validator(instance, scheme):
+            supported_schemes = ['minimum-visits', 'logZ-flatness', 'histogram-flatness']
+            if scheme not in supported_schemes:
+                raise ValueError("Unknown update scheme '{}'. Supported values "
+                                 "are {}.".format(scheme, supported_schemes))
+            return scheme
+
+        @staticmethod
         def _weight_update_method_validator(instance, scheme):
             supported_schemes = ['optimal', 'rao-blackwellized']
             if scheme not in supported_schemes:
@@ -254,6 +267,7 @@ class SAMSSampler(MultiStateSampler):
     state_update_scheme = _StoredProperty('state_update_scheme', validate_function=_StoredProperty._state_update_scheme_validator)
     locality = _StoredProperty('locality', validate_function=None)
     update_stages = _StoredProperty('update_stages', validate_function=_StoredProperty._update_stages_validator)
+    flatness_criteria = _StoredProperty('flatness_criteria', validate_function=_StoredProperty._flatness_criteria_validator)
     flatness_threshold = _StoredProperty('flatness_threshold', validate_function=None)
     weight_update_method = _StoredProperty('weight_update_method', validate_function=_StoredProperty._weight_update_method_validator)
     adapt_target_probabilities = _StoredProperty('adapt_target_probabilities', validate_function=_StoredProperty._adapt_target_probabilities_validator)
@@ -533,9 +547,7 @@ class SAMSSampler(MultiStateSampler):
         Determine which adaptation stage we're in by checking histogram flatness.
 
         """
-        # TODO: Make this a user option
-        #flatness_criteria = 'minimum-visits' # DEBUG
-        flatness_criteria = 'logZ-flatness' # DEBUG
+        # TODO: Make minimum_visits a user option
         minimum_visits = 1
         N_k = self._state_histogram
         logger.debug('    state histogram counts ({} total): {}'.format(self._cached_state_histogram.sum(), self._cached_state_histogram))
@@ -545,18 +557,18 @@ class SAMSSampler(MultiStateSampler):
                 # No samples yet; don't do anything.
                 return
 
-            if flatness_criteria == 'minimum-visits':
+            if self.flatness_criteria == 'minimum-visits':
                 # Advance if every state has been visited at least once
                 if np.all(N_k >= minimum_visits):
                     advance = True
-            elif flatness_criteria == 'flatness-threshold':
+            elif self.flatness_criteria == 'histogram-flatness':
                 # Check histogram flatness
                 empirical_pi_k = N_k[:] / N_k.sum()
                 pi_k = np.exp(self.log_target_probabilities)
                 relative_error_k = np.abs(pi_k - empirical_pi_k) / pi_k
                 if np.all(relative_error_k < self.flatness_threshold):
                     advance = True
-            elif flatness_criteria == 'logZ-flatness':
+            elif self.flatness_criteria == 'logZ-flatness':
                 # TODO: Advance to asymptotically optimal scheme when logZ update fractional counts per state exceed threshold
                 # for all states.
                 criteria = abs(self._logZ / self.gamma0) > self.flatness_threshold
