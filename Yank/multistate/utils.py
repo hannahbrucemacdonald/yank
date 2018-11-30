@@ -250,7 +250,7 @@ def remove_unequilibrated_data(data, number_equilibrated, axis):
     # Set the dimension we are truncating
     slc[axis] = slice(number_equilibrated, None)
     # Slice
-    equilibrated_data = cast_data[slc]
+    equilibrated_data = cast_data[slice(slc)]
     return equilibrated_data
 
 
